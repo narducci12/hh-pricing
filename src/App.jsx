@@ -27,7 +27,7 @@ const SP_PRICES = [
 ];
 const EMB_PRICE_PER_PC = 5.00;
 const PUFF_UPCHARGE    = 3.00;
-const OVERHEAD_PER_PC  = 1.00;
+const OVERHEAD_PER_PC  = 1.50;
 const CC_FEE           = 0.04;
 const LS_KEY           = "hh_saved_quotes";
 
@@ -66,9 +66,8 @@ const styles = `
 
   /* Header */
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 24px; margin-bottom: 32px; border-bottom: 2px solid rgba(254,251,221,0.12); }
-  .logo-lockup { display: flex; flex-direction: column; }
-  .logo { font-family: 'Teko', sans-serif; font-weight: 700; font-size: 3.4rem; letter-spacing: 0.04em; line-height: 0.9; color: #fefbdd; text-transform: uppercase; }
-  .logo em { font-style: normal; color: #f8a232; }
+  .logo-lockup { display: flex; flex-direction: column; gap: 4px; }
+  .header-logo { height: 52px; width: auto; display: block; }
   .logo-sub { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.3em; text-transform: uppercase; color: #28b571; margin-top: 2px; }
   .header-right { display: flex; align-items: center; gap: 10px; }
   .header-badge { background: #f8a232; color: #003619; font-family: 'Teko', sans-serif; font-weight: 700; font-size: 1rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 16px; border-radius: 4px; }
@@ -356,8 +355,8 @@ export default function PricingCalculator() {
         {/* Header */}
         <div className="header">
           <div className="logo-lockup">
-            <div className="logo">Heart <em>&</em> Hook</div>
-            <div className="logo-sub">Apparel · Pricing Calculator</div>
+            <img src="/logo.png" alt="Heart & Hook Apparel" className="header-logo" />
+            <div className="logo-sub">Pricing Calculator</div>
           </div>
           <div className="header-right">
             <div className="header-badge">2026 Rates</div>
@@ -488,7 +487,7 @@ export default function PricingCalculator() {
         {/* Fixed Costs */}
         <div className="section-label">Applied Automatically</div>
         <div className="fixed-strip">
-          {[{l:"Overhead",v:"$1.00 / pc"},{l:"CC Processing",v:"4.0%"}].map(x=>(
+          {[{l:"Overhead",v:"$1.50 / pc"},{l:"CC Processing",v:"4.0%"}].map(x=>(
             <div className="fixed-pill" key={x.l}><span className="fp-label">{x.l}</span><span className="fp-val">{x.v}</span></div>
           ))}
         </div>
@@ -524,7 +523,7 @@ export default function PricingCalculator() {
             {r.decorLines.map((dl,i)=>(
               <div className="result-line" key={i}><span>{dl.label}</span><span className="val">{dl.flat ? fmt(dl.flat) : fmt(dl.perUnit * r.q)}</span></div>
             ))}
-            <div className="result-line"><span>Overhead ({r.q} × $1.00)</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
+            <div className="result-line"><span>Overhead ({r.q} × $1.50)</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
             <div className="result-line rl-subtotal"><span>Total cost</span><span className="val">{fmt(r.totalCost)}</span></div>
             <div className="result-line"><span>Profit ({margin}% margin)</span><span className="val">+{fmt(r.preBCC - r.totalCost)}</span></div>
             <div className="result-line"><span>Credit card fee (4%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
