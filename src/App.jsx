@@ -67,7 +67,7 @@ const styles = `
   /* Header */
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 24px; margin-bottom: 32px; border-bottom: 2px solid rgba(254,251,221,0.12); }
   .logo-lockup { display: flex; flex-direction: column; gap: 4px; }
-  .header-logo { height: 80px; width: auto; display: block; object-fit: contain; }
+  .header-logo { height: 240px; width: auto; display: block; object-fit: contain; }
   .logo-sub { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.3em; text-transform: uppercase; color: #28b571; margin-top: 2px; }
   .header-right { display: flex; align-items: center; gap: 10px; }
   .header-badge { background: #f8a232; color: #003619; font-family: 'Teko', sans-serif; font-weight: 700; font-size: 1rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 16px; border-radius: 4px; }
