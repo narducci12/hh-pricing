@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 
 // ── Data Tables ──────────────────────────────────────────────────────────────
+// PRINT COLLECTIVE — per-piece screen print cost. NOTE: screen/setup fees are
+// already baked into these per-piece rates (no separate setup charge).
 const SP_QTY_TIERS = [
   { label: "48–71",     min: 48,   max: 71   },
   { label: "72–143",    min: 72,   max: 143  },
@@ -25,6 +27,41 @@ const SP_PRICES = [
   [14.98,10.73, 8.80, 7.21, 5.75, 5.27, 3.93, 3.24 ],
   [16.15,11.54, 9.42, 7.70, 6.11, 5.61, 4.15, 3.42 ],
 ];
+
+// LOGOWEAR EXPRESS — 2026 contract screen printing (per location, per piece).
+// Setup is NOT included: $25/color/location new, $10/color/location exact reorder.
+// Each tier has a max color count and an underbase (dye-barrier) upcharge.
+const LWE_QTY_TIERS = [
+  { label: "24–47",     min: 24,   max: 47,       maxColors: 4, underbase: 1.50 },
+  { label: "48–71",     min: 48,   max: 71,       maxColors: 5, underbase: 1.00 },
+  { label: "72–95",     min: 72,   max: 95,       maxColors: 6, underbase: 0.60 },
+  { label: "96–143",    min: 96,   max: 143,      maxColors: 6, underbase: 0.45 },
+  { label: "144–287",   min: 144,  max: 287,      maxColors: 8, underbase: 0.35 },
+  { label: "288–431",   min: 288,  max: 431,      maxColors: 8, underbase: 0.30 },
+  { label: "432–565",   min: 432,  max: 565,      maxColors: 8, underbase: 0.25 },
+  { label: "566–1151",  min: 566,  max: 1151,     maxColors: 8, underbase: 0.25 },
+  { label: "1152–2304", min: 1152, max: 2304,     maxColors: 8, underbase: 0.25 },
+  { label: "2305–4608", min: 2305, max: 4608,     maxColors: 8, underbase: 0.20 },
+  { label: "4609+",     min: 4609, max: Infinity, maxColors: 8, underbase: 0.20 },
+];
+// Rows = 1..8 colors; columns align to LWE_QTY_TIERS. null = not offered (over color max).
+const LWE_PRICES = [
+  [ 2.85, 1.85, 1.65, 1.30, 1.20, 1.10, 1.05, 0.95, 0.90, 0.85, 0.80 ], // 1c
+  [ 4.10, 2.70, 2.20, 1.75, 1.45, 1.35, 1.20, 1.10, 1.05, 0.95, 0.90 ], // 2c
+  [ 5.20, 3.50, 2.80, 2.20, 1.75, 1.45, 1.35, 1.25, 1.15, 1.10, 1.05 ], // 3c
+  [ 6.40, 4.10, 3.40, 2.65, 2.20, 1.65, 1.50, 1.45, 1.30, 1.20, 1.15 ], // 4c
+  [ null, 5.05, 3.95, 2.95, 2.30, 1.85, 1.65, 1.60, 1.45, 1.35, 1.25 ], // 5c
+  [ null, null, 4.55, 3.40, 2.60, 2.00, 1.80, 1.75, 1.65, 1.45, 1.35 ], // 6c
+  [ null, null, null, null, 2.80, 2.20, 2.00, 1.90, 1.80, 1.60, 1.45 ], // 7c
+  [ null, null, null, null, 3.05, 2.35, 2.15, 2.05, 1.95, 1.75, 1.60 ], // 8c
+];
+const LWE_SETUP_NEW     = 25.00; // per color / per location, new order
+const LWE_SETUP_REORDER = 10.00; // per color / per location, exact reorder
+const LWE_MIN_ORDER     = 50.00; // minimum LWE invoice (decoration + setup)
+const LWE_MAX_COLORS    = 8;
+const LWE_POLY_UPCHARGE   = 0.50; // polyester shirts, per piece / per location
+const LWE_SLEEVE_UPCHARGE = 0.35; // sleeve / specialty location, per piece / per location
+
 const EMB_PRICE_PER_PC = 5.00;
 const PUFF_UPCHARGE    = 3.00;
 const OVERHEAD_PER_PC  = 1.50;
@@ -42,12 +79,41 @@ function getDtfPrice(sizeKey) {
   return DTF_SIZES.find(s => s.key === sizeKey)?.price ?? 5.00;
 }
 
+// Print Collective lookup (screens included in per-piece).
 function getScreenPrintPrice(colors, qty) {
   const col = SP_QTY_TIERS.findIndex(t => qty >= t.min && qty <= t.max);
   if (col === -1) return null;
   return SP_PRICES[Math.min(colors - 1, 11)][col] ?? null;
 }
+
+// LogoWear Express lookup. Returns availability + per-piece price + tier meta.
+function getLwePrice(colors, qty) {
+  const col = LWE_QTY_TIERS.findIndex(t => qty >= t.min && qty <= t.max);
+  if (col === -1) return { available: false, reason: `qty ${qty} outside LWE range (24+)` };
+  const tier = LWE_QTY_TIERS[col];
+  if (colors > LWE_MAX_COLORS)
+    return { available: false, reason: `LWE prints max ${LWE_MAX_COLORS} colors`, tier };
+  const p = LWE_PRICES[colors - 1]?.[col];
+  if (p == null)
+    return { available: false, reason: `${colors} colors over ${tier.maxColors}-color max for ${tier.label}`, tier };
+  return { available: true, price: p, tier, underbaseUp: tier.underbase };
+}
+
 function getEmbroideryPrice() { return EMB_PRICE_PER_PC; }
+
+// Money math shared by every vendor. setupFlat = one-time cost spread over qty.
+function priceOut(gc, decorCostPU, overheadPU, setupFlat, q, mg) {
+  const variableCostPU = gc + decorCostPU + overheadPU;
+  const totalCost  = variableCostPU * q + setupFlat;
+  const preBCC     = totalCost / (1 - mg / 100);
+  const grandTotal = preBCC / (1 - CC_FEE);
+  const ccFee      = grandTotal - preBCC;
+  const perUnit    = grandTotal / q;
+  const marginPU   = (preBCC - totalCost) / q;
+  const ccFeePU    = ccFee / q;
+  const setupPU    = setupFlat / q;
+  return { totalCost, preBCC, ccFee, grandTotal, perUnit, marginPU, ccFeePU, setupPU, setupFlat };
+}
 
 function loadFromStorage() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; }
@@ -88,6 +154,7 @@ const styles = `
   .qi-name { font-weight: 600; font-size: 0.88rem; color: #fefbdd; margin-bottom: 2px; }
   .qi-meta { font-size: 0.72rem; color: rgba(254,251,221,0.4); display: flex; gap: 10px; flex-wrap: wrap; }
   .qi-meta span { display: flex; align-items: center; gap: 3px; }
+  .qi-vendor { color: #28b571; font-weight: 600; }
   .qi-price { font-family: 'Teko', sans-serif; font-weight: 700; font-size: 1.6rem; color: #f8a232; text-align: right; line-height: 1; }
   .qi-price-sub { font-size: 0.65rem; color: rgba(254,251,221,0.3); text-align: right; text-transform: uppercase; letter-spacing: 0.05em; }
   .qi-actions { display: flex; gap: 6px; }
@@ -121,6 +188,8 @@ const styles = `
   /* Locations */
   .locations { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
   .location-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; background: rgba(0,0,0,0.2); border: 1px solid rgba(254,251,221,0.1); border-radius: 8px; padding: 14px; }
+  .location-row.sp-print-row { display: flex; flex-wrap: wrap; align-items: end; }
+  .location-row.sp-print-row .field { flex: 1 1 130px; min-width: 120px; }
   .emb-location-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 10px; align-items: end; background: rgba(0,0,0,0.2); border: 1px solid rgba(254,251,221,0.1); border-radius: 8px; padding: 14px; }
   .puff-toggle { display: flex; flex-direction: column; align-items: center; gap: 7px; padding-bottom: 3px; }
   .puff-toggle span { font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; color: rgba(254,251,221,0.4); white-space: nowrap; }
@@ -203,6 +272,33 @@ const styles = `
   .pc-line.pc-total .pc-lbl { color: #f8a232; font-weight: 600; }
   .pc-line.pc-total .pc-val { color: #f8a232; font-size: 0.85rem; }
 
+  /* Vendor comparison */
+  .vc-summary { display: flex; align-items: center; gap: 10px; background: rgba(0,54,25,0.06); border: 1px solid rgba(0,54,25,0.12); border-left: 4px solid #28b571; border-radius: 8px; padding: 12px 16px; margin-bottom: 18px; font-size: 0.9rem; }
+  .vc-summary .vc-sum-icon { font-size: 1.1rem; }
+  .vc-summary b { color: #003619; }
+  .vc-summary .vc-save { color: #1f8a54; font-weight: 700; }
+  .vc-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .vendor-card { border: 2px solid rgba(0,54,25,0.15); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; background: #fff; }
+  .vendor-card.vc-best { border-color: #28b571; box-shadow: 0 0 0 3px rgba(40,181,113,0.12); }
+  .vendor-card.vc-na { opacity: 0.72; background: rgba(0,54,25,0.03); }
+  .vc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(0,54,25,0.1); }
+  .vc-name { font-family: 'Teko', sans-serif; font-weight: 700; font-size: 1.15rem; letter-spacing: 0.05em; text-transform: uppercase; color: #003619; line-height: 1; }
+  .vc-best-badge { background: #28b571; color: #fff; font-family: 'Teko', sans-serif; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; white-space: nowrap; }
+  .vc-na-badge { background: rgba(231,76,60,0.12); color: #c0392b; font-family: 'Teko', sans-serif; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; }
+  .vc-price { font-family: 'Teko', sans-serif; font-weight: 700; font-size: 3rem; color: #003619; line-height: 1; }
+  .vc-price .vc-price-sub { font-family: 'Poppins', sans-serif; font-size: 0.75rem; font-weight: 500; color: rgba(0,54,25,0.45); margin-left: 4px; }
+  .vc-total { font-size: 0.82rem; color: rgba(0,54,25,0.6); margin: 3px 0 12px; }
+  .vc-total b { color: #003619; font-size: 0.95rem; }
+  .vc-lines { display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
+  .vc-line { display: flex; justify-content: space-between; gap: 10px; font-size: 0.76rem; color: rgba(0,54,25,0.6); }
+  .vc-line .vc-v { font-weight: 600; color: #003619; font-variant-numeric: tabular-nums; }
+  .vc-line.vc-profit .vc-v { color: #1f8a54; }
+  .vc-line.vc-div { border-top: 1px solid rgba(0,54,25,0.12); padding-top: 5px; margin-top: 3px; }
+  .vc-line.vc-tot .vc-l { color: #003619; font-weight: 700; }
+  .vc-line.vc-tot .vc-v { color: #003619; font-weight: 700; }
+  .vc-na-msg { font-size: 0.82rem; color: #c0392b; line-height: 1.5; padding: 14px 0; }
+  .vc-note { font-size: 0.68rem; color: rgba(0,54,25,0.4); margin-top: 8px; line-height: 1.4; }
+
   /* Order lines */
   .result-line { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(0,54,25,0.1); font-size: 0.85rem; color: rgba(0,54,25,0.6); }
   .result-line:last-child { border-bottom: none; }
@@ -224,6 +320,7 @@ const styles = `
     .quote-item { grid-template-columns: 1fr auto; }
     .qi-price { display: none; }
     .header-right { flex-direction: column; align-items: flex-end; gap: 6px; }
+    .vc-compare { grid-template-columns: 1fr; }
   }
 `;
 
@@ -236,10 +333,12 @@ export default function PricingCalculator() {
   const [qty, setQty]                 = useState(72);
   const [garmentCost, setGarmentCost] = useState(8.00);
   const [margin, setMargin]           = useState(40);
-  const [spLocations, setSpLocations] = useState([{ name: "Front", colors: 1, size: "medium" }]);
+  const [spLocations, setSpLocations] = useState([{ name: "Front", colors: 1, size: "medium", underbase: false, sleeve: false }]);
   const [embLocations, setEmbLocations] = useState([{ name: "Left Chest", stitches: 7000, puff: false }]);
   const [includeDigitizing, setIncludeDigitizing] = useState(false);
   const [digitizingFee, setDigitizingFee]         = useState(0);
+  const [exactReorder, setExactReorder]           = useState(false);
+  const [polyester, setPolyester]                 = useState(false);
 
   // Quote management
   const [savedQuotes, setSavedQuotes] = useState(() => loadFromStorage());
@@ -250,7 +349,7 @@ export default function PricingCalculator() {
   useEffect(() => { saveToStorage(savedQuotes); }, [savedQuotes]);
 
   // Location helpers
-  const addSpLoc    = () => setSpLocations([...spLocations, { name: "", colors: 1, size: "medium" }]);
+  const addSpLoc    = () => setSpLocations([...spLocations, { name: "", colors: 1, size: "medium", underbase: false, sleeve: false }]);
   const removeSpLoc = (i) => setSpLocations(spLocations.filter((_, x) => x !== i));
   const updateSpLoc = (i, k, v) => { const n=[...spLocations]; n[i]={...n[i],[k]:v}; setSpLocations(n); };
   const addEmbLoc    = () => setEmbLocations([...embLocations, { name: "", stitches: 7000, puff: false }]);
@@ -262,26 +361,97 @@ export default function PricingCalculator() {
     const q  = Math.max(1, parseInt(qty) || 0);
     const gc = parseFloat(garmentCost) || 0;
     const mg = parseFloat(margin) || 0;
-    let decorCostPU = 0, warnings = [], decorLines = [];
+    const overheadPU = OVERHEAD_PER_PC;
 
-    if (mode === "screen") {
-      if (q >= 5000) warnings.push("Orders over 5,000 pieces — call for a custom quote.");
-      if (q < 48) {
-        // DTF — priced by size, no minimums
-        for (const loc of spLocations) {
-          const p = getDtfPrice(loc.size || "medium");
-          const sizeLabel = DTF_SIZES.find(s => s.key === (loc.size || "medium"))?.label || "Medium";
-          decorCostPU += p;
-          decorLines.push({ label: `${loc.name || "DTF"} — ${sizeLabel}`, perUnit: p });
-        }
-      } else {
-        // Screen print
+    // Screen mode, qty ≥ 24 → vendor comparison.
+    //   48+ : Print Collective vs LogoWear Express (both screen print)
+    //   24–47: in-house DTF vs LogoWear Express (PC min is 48)
+    if (mode === "screen" && q >= 24) {
+      const globalWarnings = [];
+      if (q >= 5000) globalWarnings.push("Order over 5,000 pcs — LogoWear tops out at 4,609+; confirm both vendors for custom volume.");
+
+      // ── First vendor: Print Collective (48+) or in-house DTF (24–47) ──
+      let firstVendor;
+      if (q >= 48) {
+        let pcDecorPU = 0; const pcLines = []; const pcWarn = [];
         for (const loc of spLocations) {
           const c = Math.max(1, Math.min(12, parseInt(loc.colors) || 1));
           const p = getScreenPrintPrice(c, q);
-          if (p === null) warnings.push(`${loc.name || "Location"}: price not available at qty ${q}.`);
-          else { decorCostPU += p; decorLines.push({ label: `${loc.name || "Print"} (${c}c)`, perUnit: p }); }
+          if (p === null) { pcWarn.push(`${loc.name || "Location"}: no PC price at qty ${q}.`); }
+          else { pcDecorPU += p; pcLines.push({ label: `${loc.name || "Print"} (${c}c)`, perUnit: p }); }
         }
+        const pcAvailable = pcWarn.length === 0 && pcLines.length > 0;
+        const pcMoney = pcAvailable ? priceOut(gc, pcDecorPU, overheadPU, 0, q, mg) : null;
+        firstVendor = { key: "pc", name: "Print Collective", available: pcAvailable, lines: pcLines,
+          decorPU: pcDecorPU, setupFlat: 0, screens: 0, minAdj: 0, warnings: pcWarn,
+          note: "Screen/setup fees are built into the per-piece rate.", ...(pcMoney || {}) };
+      } else {
+        let dtfDecorPU = 0; const dtfLines = [];
+        for (const loc of spLocations) {
+          const p = getDtfPrice(loc.size || "medium");
+          const sizeLabel = DTF_SIZES.find(s => s.key === (loc.size || "medium"))?.label || "Medium";
+          dtfDecorPU += p;
+          dtfLines.push({ label: `${loc.name || "DTF"} — ${sizeLabel}`, perUnit: p });
+        }
+        const dtfMoney = priceOut(gc, dtfDecorPU, overheadPU, 0, q, mg);
+        firstVendor = { key: "dtf", name: "DTF (In-House)", available: true, lines: dtfLines,
+          decorPU: dtfDecorPU, setupFlat: 0, screens: 0, minAdj: 0, warnings: [],
+          note: "In-house DTF — priced by print size, no setup or color limits.", ...dtfMoney };
+      }
+
+      // ── LogoWear Express: per-piece + setup + underbase + poly + sleeve ──
+      let lweDecorPU = 0, lweScreens = 0, lweAvailable = true;
+      const lweLines = []; const lweWarn = []; const lweExtras = [];
+      for (const loc of spLocations) {
+        const c = Math.max(1, parseInt(loc.colors) || 1);
+        const res = getLwePrice(c, q);
+        if (!res.available) { lweAvailable = false; lweWarn.push(`${loc.name || "Location"}: ${res.reason}`); continue; }
+        let pu = res.price, screens = c, lbl = `${loc.name || "Print"} (${c}c)`;
+        if (loc.underbase) {
+          if (c + 1 > res.tier.maxColors) {
+            lweAvailable = false;
+            lweWarn.push(`${loc.name || "Location"}: ${c} colors + underbase over ${res.tier.maxColors}-screen max for ${res.tier.label}.`);
+            continue;
+          }
+          pu += res.underbaseUp; screens += 1; lbl += " + underbase";
+        }
+        if (polyester)   { pu += LWE_POLY_UPCHARGE;   lbl += " + poly"; }
+        if (loc.sleeve)  { pu += LWE_SLEEVE_UPCHARGE; lbl += " + sleeve"; }
+        lweDecorPU += pu; lweScreens += screens;
+        lweLines.push({ label: lbl, perUnit: pu });
+      }
+      if (polyester)  lweExtras.push(`polyester +${fmt(LWE_POLY_UPCHARGE)}/pc`);
+      const setupRate = exactReorder ? LWE_SETUP_REORDER : LWE_SETUP_NEW;
+      let lweSetupFlat = lweAvailable ? setupRate * lweScreens : 0;
+      let lweMinAdj = 0;
+      if (lweAvailable) {
+        const lweCogs = lweDecorPU * q + lweSetupFlat;
+        if (lweCogs < LWE_MIN_ORDER) lweMinAdj = LWE_MIN_ORDER - lweCogs;
+      }
+      const lweMoney = lweAvailable ? priceOut(gc, lweDecorPU, overheadPU, lweSetupFlat + lweMinAdj, q, mg) : null;
+      const lweNote = `Setup: ${lweScreens} screen${lweScreens === 1 ? "" : "s"} × ${fmt(setupRate)}${exactReorder ? " (reorder)" : ""} = ${fmt(lweSetupFlat)}.`
+        + (lweExtras.length ? ` Incl. ${lweExtras.join(", ")}.` : "");
+      const lweVendor = { key: "lwe", name: "LogoWear Express", available: lweAvailable, lines: lweLines,
+        decorPU: lweDecorPU, setupFlat: lweSetupFlat + lweMinAdj, screens: lweScreens, minAdj: lweMinAdj,
+        warnings: lweWarn, note: lweNote, ...(lweMoney || {}) };
+
+      const vendors = [firstVendor, lweVendor];
+      const avail = vendors.filter(v => v.available && v.grandTotal != null);
+      let bestKey = null;
+      if (avail.length) bestKey = avail.reduce((a, b) => (a.grandTotal <= b.grandTotal ? a : b)).key;
+
+      return { kind: "compare", subkind: q >= 48 ? "screen" : "small", q, gc, overheadPU, vendors, bestKey, warnings: globalWarnings };
+    }
+
+    // Single-vendor path: DTF (< 24) and Embroidery
+    let decorCostPU = 0, warnings = [], decorLines = [];
+    if (mode === "screen") {
+      // DTF — priced by size, no minimums
+      for (const loc of spLocations) {
+        const p = getDtfPrice(loc.size || "medium");
+        const sizeLabel = DTF_SIZES.find(s => s.key === (loc.size || "medium"))?.label || "Medium";
+        decorCostPU += p;
+        decorLines.push({ label: `${loc.name || "DTF"} — ${sizeLabel}`, perUnit: p });
       }
     } else {
       for (const loc of embLocations) {
@@ -297,35 +467,49 @@ export default function PricingCalculator() {
       }
     }
 
-    const overheadPU = OVERHEAD_PER_PC;
-    const costPU     = gc + decorCostPU + overheadPU;
-    const totalCost  = costPU * q;
-    const preBCC     = totalCost / (1 - mg / 100);
-    const grandTotal = preBCC / (1 - CC_FEE);
-    const ccFee      = grandTotal - preBCC;
-    const perUnit    = grandTotal / q;
-    const marginPU   = (preBCC - totalCost) / q;
-    const ccFeePU    = ccFee / q;
-
-    return { q, gc, decorLines, decorCostPU, overheadPU, marginPU, ccFeePU,
-             totalCost, preBCC, ccFee, grandTotal, perUnit, warnings };
-  }, [mode, qty, garmentCost, margin, spLocations, embLocations, includeDigitizing, digitizingFee]);
+    const m = priceOut(gc, decorCostPU, overheadPU, 0, q, mg);
+    return { kind: "single", q, gc, decorLines, decorCostPU, overheadPU,
+             marginPU: m.marginPU, ccFeePU: m.ccFeePU,
+             totalCost: m.totalCost, preBCC: m.preBCC, ccFee: m.ccFee,
+             grandTotal: m.grandTotal, perUnit: m.perUnit, warnings };
+  }, [mode, qty, garmentCost, margin, spLocations, embLocations, includeDigitizing, digitizingFee, exactReorder, polyester]);
 
   const r = calc();
+  const qn = parseInt(qty) || 0;
+  const isDtfOnly     = mode === "screen" && qn < 24;   // below LWE's 24-pc minimum
+  const isSmallCompare = mode === "screen" && qn >= 24 && qn < 48; // DTF vs LWE
+  const isCompareInputs = mode === "screen" && qn >= 24; // any location row needs colors
 
   // ── Quote Actions ─────────────────────────────────────────────────────────
   const saveQuote = () => {
     if (!quoteName.trim()) return;
-    const q = {
+    let headlinePerUnit = null, headlineTotal = null, vendorCompare = null, vendorLabel = null;
+    if (r.kind === "compare") {
+      const best = r.vendors.find(v => v.key === r.bestKey);
+      headlinePerUnit = best?.perUnit ?? null;
+      headlineTotal   = best?.grandTotal ?? null;
+      vendorLabel     = best?.name ?? null;
+      vendorCompare   = {
+        bestKey: r.bestKey,
+        vendors: r.vendors.map(v => ({ key: v.key, name: v.name, available: v.available,
+          perUnit: v.perUnit ?? null, grandTotal: v.grandTotal ?? null })),
+      };
+    } else {
+      headlinePerUnit = r.perUnit;
+      headlineTotal   = r.grandTotal;
+    }
+    const quote = {
       id: Date.now().toString(),
       name: quoteName.trim(),
       savedAt: new Date().toISOString(),
       mode, qty, garmentCost, margin,
-      spLocations, embLocations, includeDigitizing, digitizingFee,
-      perUnit: r.perUnit,
-      grandTotal: r.grandTotal,
+      spLocations, embLocations, includeDigitizing, digitizingFee, exactReorder, polyester,
+      perUnit: headlinePerUnit,
+      grandTotal: headlineTotal,
+      vendorLabel,
+      vendorCompare,
     };
-    setSavedQuotes(prev => [q, ...prev]);
+    setSavedQuotes(prev => [quote, ...prev]);
     setQuoteName("");
     setSaveFlash(true);
     setTimeout(() => setSaveFlash(false), 2000);
@@ -336,15 +520,37 @@ export default function PricingCalculator() {
     setQty(q.qty);
     setGarmentCost(q.garmentCost);
     setMargin(q.margin);
-    setSpLocations(q.spLocations);
+    setSpLocations(q.spLocations.map(l => ({ underbase: false, sleeve: false, ...l })));
     setEmbLocations(q.embLocations);
     setIncludeDigitizing(q.includeDigitizing);
     setDigitizingFee(q.digitizingFee);
+    setExactReorder(!!q.exactReorder);
+    setPolyester(!!q.polyester);
     setShowQuotes(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const deleteQuote = (id) => setSavedQuotes(prev => prev.filter(q => q.id !== id));
+
+  // Comparison summary text
+  let compareSummary = null;
+  if (r.kind === "compare") {
+    const [a, b] = r.vendors;
+    if (a.available && b.available) {
+      const best = a.grandTotal <= b.grandTotal ? a : b;
+      const other = best === a ? b : a;
+      const save = other.grandTotal - best.grandTotal;
+      const pct = other.grandTotal > 0 ? (save / other.grandTotal) * 100 : 0;
+      compareSummary = save < 0.005
+        ? { icon: "⚖️", text: <>Both vendors land at <b>{fmt(best.grandTotal)}</b> — it's a wash.</> }
+        : { icon: "🏆", text: <><b>{best.name}</b> is cheaper by <span className="vc-save">{fmt(save)} ({pct.toFixed(1)}%)</span> on this job.</> };
+    } else if (a.available || b.available) {
+      const only = a.available ? a : b;
+      compareSummary = { icon: "⚠️", text: <>Only <b>{only.name}</b> can produce this job at these colors/qty.</> };
+    } else {
+      compareSummary = { icon: "⚠️", text: <>Neither vendor can produce this job as configured — check color counts.</> };
+    }
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -383,6 +589,7 @@ export default function PricingCalculator() {
                         <div className="qi-meta">
                           <span>{q.mode === "screen" ? (q.qty < 48 ? "DTF" : "Screen Print") : "Embroidery"}</span>
                           <span>{q.qty} pcs</span>
+                          {q.vendorLabel && <span className="qi-vendor">{q.vendorLabel}</span>}
                           <span>{fmtDate(q.savedAt)}</span>
                         </div>
                       </div>
@@ -420,34 +627,68 @@ export default function PricingCalculator() {
 
         {/* Screen Print / DTF */}
         {mode === "screen" && (<>
-          {parseInt(qty) < 48 ? (
+          {isDtfOnly ? (
             <div className="dtf-banner">
               <span className="dtf-badge">DTF</span>
-              Under 48 pieces — pricing automatically switched to Direct to Film (no minimums, no color limits, priced by print size).
+              Under 24 pieces — below LogoWear's screen-print minimum, so pricing is in-house Direct to Film (no minimums, no color limits, priced by print size).
+            </div>
+          ) : isSmallCompare ? (
+            <div className="dtf-banner">
+              <span className="dtf-badge">24–47</span>
+              Small run — Print Collective's 48-piece minimum doesn't apply, so this compares in-house DTF (by print size) against LogoWear screen print (by colors). Set both so each vendor can price.
             </div>
           ) : null}
-          <div className="section-label">{parseInt(qty) < 48 ? "DTF Print Locations" : "Print Locations"}</div>
+          <div className="section-label">{isDtfOnly ? "DTF Print Locations" : "Print Locations"}</div>
           <div className="locations">
             {spLocations.map((loc, i) => (
-              <div className="location-row" key={i}>
+              <div className={`location-row ${isCompareInputs ? "sp-print-row" : ""}`} key={i}>
                 <div className="field"><label>Location Name</label>
                   <input type="text" placeholder="e.g. Front Chest" value={loc.name} onChange={e=>updateSpLoc(i,"name",e.target.value)} /></div>
-                {parseInt(qty) < 48 ? (
-                  <div className="field"><label>Print Size</label>
+                {(isDtfOnly || isSmallCompare) && (
+                  <div className="field"><label>{isSmallCompare ? "DTF Size" : "Print Size"}</label>
                     <select value={loc.size || "medium"} onChange={e=>updateSpLoc(i,"size",e.target.value)}>
                       {DTF_SIZES.map(s=><option key={s.key} value={s.key}>{s.label} — ${s.price.toFixed(2)}</option>)}
                     </select></div>
-                ) : (
+                )}
+                {isCompareInputs && (
                   <div className="field"><label>Colors</label>
                     <select value={loc.colors} onChange={e=>updateSpLoc(i,"colors",parseInt(e.target.value))}>
                       {[1,2,3,4,5,6,7,8,9,10,11,12].map(n=><option key={n} value={n}>{n} Color{n>1?"s":""}</option>)}
                     </select></div>
                 )}
+                {isCompareInputs && (<>
+                  <div className="puff-toggle">
+                    <span>Underbase</span>
+                    <input type="checkbox" className="puff-checkbox" checked={!!loc.underbase}
+                      onChange={e=>updateSpLoc(i,"underbase",e.target.checked)} id={`ub-${i}`} />
+                  </div>
+                  <div className="puff-toggle">
+                    <span>Sleeve</span>
+                    <input type="checkbox" className="puff-checkbox" checked={!!loc.sleeve}
+                      onChange={e=>updateSpLoc(i,"sleeve",e.target.checked)} id={`sl-${i}`} />
+                  </div>
+                </>)}
                 {spLocations.length > 1 && <button className="remove-btn" onClick={()=>removeSpLoc(i)}>×</button>}
               </div>
             ))}
           </div>
-          <button className="add-btn" onClick={addSpLoc}>+ Add {parseInt(qty) < 48 ? "DTF" : "Print"} Location</button>
+          <button className="add-btn" onClick={addSpLoc}>+ Add {isDtfOnly ? "DTF" : "Print"} Location</button>
+          {isCompareInputs && (<>
+            <div className="toggle-row" style={{marginTop: "12px"}}>
+              <span className="toggle-label">Polyester garment — LogoWear adds ${LWE_POLY_UPCHARGE.toFixed(2)}/pc per location</span>
+              <div className="toggle-right">
+                <input type="checkbox" checked={polyester} onChange={e=>setPolyester(e.target.checked)} id="poly-toggle" />
+                <label htmlFor="poly-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Polyester</label>
+              </div>
+            </div>
+            <div className="toggle-row">
+              <span className="toggle-label">Exact reorder — LogoWear setup drops to $10/screen (from $25)</span>
+              <div className="toggle-right">
+                <input type="checkbox" checked={exactReorder} onChange={e=>setExactReorder(e.target.checked)} id="reorder-toggle" />
+                <label htmlFor="reorder-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Reorder</label>
+              </div>
+            </div>
+          </>)}
         </>)}
 
         {/* Embroidery */}
@@ -496,43 +737,91 @@ export default function PricingCalculator() {
         {r.warnings.map((w,i)=><div className="warning" key={i}>⚠ {w}</div>)}
 
         {/* Results */}
-        <div className="results">
-          <div className="results-header">
-            <h2>{mode==="screen" && r.q < 48 ? "DTF" : mode==="screen" ? "Screen Print" : "Embroidery"} — {r.q} pcs</h2>
-            <span className="results-badge">{mode==="screen" ? (r.q < 48 ? "DTF" : "Screen Print") : "Embroidery"}</span>
-          </div>
-          <div className="results-body">
-            <div className="per-piece-hero">
-              <div className="pph-left">
-                <div className="pph-label">Price Per Piece</div>
-                <div className="pph-amount">{fmt(r.perUnit)}</div>
-                <div className="pph-note">+ tax added at invoice</div>
-              </div>
-              <div className="pph-breakdown">
-                <div className="pc-line"><span className="pc-lbl">Garment</span><span className="pc-val">{fmt(r.gc)}</span></div>
-                {r.decorLines.map((dl,i)=>(
-                  <div className="pc-line" key={i}><span className="pc-lbl">{dl.label}</span><span className="pc-val">{fmt(dl.perUnit)}</span></div>
+        {r.kind === "compare" ? (
+          <div className="results">
+            <div className="results-header">
+              <h2>{r.subkind === "small" ? "Small Run" : "Screen Print"} — {r.q} pcs</h2>
+              <span className="results-badge">Vendor Compare</span>
+            </div>
+            <div className="results-body">
+              {compareSummary && (
+                <div className="vc-summary">
+                  <span className="vc-sum-icon">{compareSummary.icon}</span>
+                  <span>{compareSummary.text}</span>
+                </div>
+              )}
+              <div className="vc-compare">
+                {r.vendors.map(v => (
+                  <div className={`vendor-card ${v.key===r.bestKey ? "vc-best" : ""} ${!v.available ? "vc-na" : ""}`} key={v.key}>
+                    <div className="vc-head">
+                      <span className="vc-name">{v.name}</span>
+                      {v.available && v.key===r.bestKey && <span className="vc-best-badge">Best Price</span>}
+                      {!v.available && <span className="vc-na-badge">Can't Run</span>}
+                    </div>
+                    {v.available ? (<>
+                      <div className="vc-price">{fmt(v.perUnit)}<span className="vc-price-sub">/pc</span></div>
+                      <div className="vc-total">Order total <b>{fmt(v.grandTotal)}</b></div>
+                      <div className="vc-lines">
+                        <div className="vc-line"><span className="vc-l">Garment</span><span className="vc-v">{fmt(r.gc)}</span></div>
+                        {v.lines.map((dl,i)=>(
+                          <div className="vc-line" key={i}><span className="vc-l">{dl.label}</span><span className="vc-v">{fmt(dl.perUnit)}</span></div>
+                        ))}
+                        {v.setupFlat > 0 && (
+                          <div className="vc-line"><span className="vc-l">Setup /pc{v.minAdj>0 ? " + min" : ""}</span><span className="vc-v">{fmt(v.setupPU)}</span></div>
+                        )}
+                        <div className="vc-line"><span className="vc-l">Overhead</span><span className="vc-v">{fmt(r.overheadPU)}</span></div>
+                        <div className="vc-line vc-profit vc-div"><span className="vc-l">Margin ({margin}%)</span><span className="vc-v">+{fmt(v.marginPU)}</span></div>
+                        <div className="vc-line"><span className="vc-l">CC fee (4%)</span><span className="vc-v">+{fmt(v.ccFeePU)}</span></div>
+                        <div className="vc-line vc-tot vc-div"><span className="vc-l">Total / pc</span><span className="vc-v">{fmt(v.perUnit)}</span></div>
+                      </div>
+                      {v.note && <div className="vc-note">{v.note}</div>}
+                    </>) : (
+                      <div className="vc-na-msg">{v.warnings.join(" · ")}</div>
+                    )}
+                  </div>
                 ))}
-                <div className="pc-line"><span className="pc-lbl">Overhead</span><span className="pc-val">{fmt(r.overheadPU)}</span></div>
-                <div className="pc-line pc-profit pc-divider"><span className="pc-lbl">Margin ({margin}%)</span><span className="pc-val">+{fmt(r.marginPU)}</span></div>
-                <div className="pc-line"><span className="pc-lbl">CC fee (4%)</span><span className="pc-val">+{fmt(r.ccFeePU)}</span></div>
-                <div className="pc-line pc-total pc-divider"><span className="pc-lbl">Total / pc</span><span className="pc-val">{fmt(r.perUnit)}</span></div>
               </div>
             </div>
-            <div className="result-line"><span>Garment cost ({r.q} × {fmt(r.gc)})</span><span className="val">{fmt(r.gc * r.q)}</span></div>
-            {r.decorLines.map((dl,i)=>(
-              <div className="result-line" key={i}><span>{dl.label}</span><span className="val">{dl.flat ? fmt(dl.flat) : fmt(dl.perUnit * r.q)}</span></div>
-            ))}
-            <div className="result-line"><span>Overhead ({r.q} × $1.50)</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
-            <div className="result-line rl-subtotal"><span>Total cost</span><span className="val">{fmt(r.totalCost)}</span></div>
-            <div className="result-line"><span>Profit ({margin}% margin)</span><span className="val">+{fmt(r.preBCC - r.totalCost)}</span></div>
-            <div className="result-line"><span>Credit card fee (4%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
-            <div className="result-total">
-              <span className="rt-label">Order Total</span>
-              <div><div className="rt-amount">{fmt(r.grandTotal)}</div><div className="rt-note">+ tax at invoice</div></div>
+          </div>
+        ) : (
+          <div className="results">
+            <div className="results-header">
+              <h2>{isDtfOnly ? "DTF" : "Embroidery"} — {r.q} pcs</h2>
+              <span className="results-badge">{isDtfOnly ? "DTF" : "Embroidery"}</span>
+            </div>
+            <div className="results-body">
+              <div className="per-piece-hero">
+                <div className="pph-left">
+                  <div className="pph-label">Price Per Piece</div>
+                  <div className="pph-amount">{fmt(r.perUnit)}</div>
+                  <div className="pph-note">+ tax added at invoice</div>
+                </div>
+                <div className="pph-breakdown">
+                  <div className="pc-line"><span className="pc-lbl">Garment</span><span className="pc-val">{fmt(r.gc)}</span></div>
+                  {r.decorLines.map((dl,i)=>(
+                    <div className="pc-line" key={i}><span className="pc-lbl">{dl.label}</span><span className="pc-val">{fmt(dl.perUnit)}</span></div>
+                  ))}
+                  <div className="pc-line"><span className="pc-lbl">Overhead</span><span className="pc-val">{fmt(r.overheadPU)}</span></div>
+                  <div className="pc-line pc-profit pc-divider"><span className="pc-lbl">Margin ({margin}%)</span><span className="pc-val">+{fmt(r.marginPU)}</span></div>
+                  <div className="pc-line"><span className="pc-lbl">CC fee (4%)</span><span className="pc-val">+{fmt(r.ccFeePU)}</span></div>
+                  <div className="pc-line pc-total pc-divider"><span className="pc-lbl">Total / pc</span><span className="pc-val">{fmt(r.perUnit)}</span></div>
+                </div>
+              </div>
+              <div className="result-line"><span>Garment cost ({r.q} × {fmt(r.gc)})</span><span className="val">{fmt(r.gc * r.q)}</span></div>
+              {r.decorLines.map((dl,i)=>(
+                <div className="result-line" key={i}><span>{dl.label}</span><span className="val">{dl.flat ? fmt(dl.flat) : fmt(dl.perUnit * r.q)}</span></div>
+              ))}
+              <div className="result-line"><span>Overhead ({r.q} × $1.50)</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
+              <div className="result-line rl-subtotal"><span>Total cost</span><span className="val">{fmt(r.totalCost)}</span></div>
+              <div className="result-line"><span>Profit ({margin}% margin)</span><span className="val">+{fmt(r.preBCC - r.totalCost)}</span></div>
+              <div className="result-line"><span>Credit card fee (4%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
+              <div className="result-total">
+                <span className="rt-label">Order Total</span>
+                <div><div className="rt-amount">{fmt(r.grandTotal)}</div><div className="rt-note">+ tax at invoice</div></div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Save Quote Bar */}
         <div className="save-bar">
