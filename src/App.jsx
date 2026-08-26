@@ -62,8 +62,35 @@ const LWE_MAX_COLORS    = 8;
 const LWE_POLY_UPCHARGE   = 0.50; // polyester shirts, per piece / per location
 const LWE_SLEEVE_UPCHARGE = 0.35; // sleeve / specialty location, per piece / per location
 
-const EMB_PRICE_PER_PC = 5.00;
-const PUFF_UPCHARGE    = 3.00;
+// EMBROIDERY — LogoWear Express 2026 contract embroidery price list, marked up
+// +15%, then a further +10% (Aug 2026). Values below are the final sell-side cost.
+// Per-piece cost = base (covers the first 7,000 stitches) + per-1,000 for every
+// additional 1,000 above that. Stitch counts round UP to the next 1,000.
+// LWE list base: 6.70/5.30/4.75/4.30/3.95/3.70/3.45/3.35
+// LWE list add'l: .50/.40/.40/.30/.30/.25/.25/.20
+const EMB_BASE_STITCHES = 7000;
+const EMB_QTY_TIERS = [
+  { label: "1–11",    min: 1,   max: 11,       base: 8.48, per1k: 0.64 },
+  { label: "12–23",   min: 12,  max: 23,       base: 6.71, per1k: 0.51 },
+  { label: "24–47",   min: 24,  max: 47,       base: 6.01, per1k: 0.51 },
+  { label: "48–71",   min: 48,  max: 71,       base: 5.45, per1k: 0.39 },
+  { label: "72–143",  min: 72,  max: 143,      base: 4.99, per1k: 0.39 },
+  { label: "144–287", min: 144, max: 287,      base: 4.69, per1k: 0.32 },
+  { label: "288–499", min: 288, max: 499,      base: 4.37, per1k: 0.32 },
+  { label: "500+",    min: 500, max: Infinity, base: 4.24, per1k: 0.25 },
+];
+const EMB_MIN_QTY         = 6;      // LWE: 6 pc minimum, apparel and hats can't combine
+const EMB_MIN_ORDER       = 63.25;  // $50 LWE embroidery min marked up (excl. digitizing/garments)
+const EMB_MAX_STITCHES    = 25000;  // above this → confirm with vendor
+const EMB_DIGI_BASE       = 37.95;  // $30 list, covers up to 12,000 stitches
+const EMB_DIGI_INCL       = 12000;
+const EMB_DIGI_PER_1K     = 6.33;   // $5 list, per 1,000 stitches over 12,000
+const PUFF_UPCHARGE       = 2.21;   // 3D puff, 1 color ($1.75 list)
+const PUFF_ADDL_COLOR     = 1.27;   // each additional puff color ($1.00 list)
+const EMB_METALLIC        = 0.95;   // metallic thread, per pc / per location ($0.75 list)
+const EMB_PERSONALIZATION = { 1: 8.86, 2: 12.65 };  // stock fonts, $7 / $10 list
+const EMB_TOPPING         = 0.64;   // topping req'd: fleece, blankets, towels ($0.50 list)
+const EMB_HOOPING         = 0.64;   // specialty hooping: bags, jackets, towels ($0.50 list)
 const OVERHEAD_PER_PC  = 1.50;
 const CC_FEE           = 0.04;
 const LS_KEY           = "hh_saved_quotes";
@@ -99,7 +126,16 @@ function getLwePrice(colors, qty) {
   return { available: true, price: p, tier, underbaseUp: tier.underbase };
 }
 
-function getEmbroideryPrice() { return EMB_PRICE_PER_PC; }
+// Embroidery per-piece cost from stitch count + quantity tier.
+function roundStitches(st) { return Math.max(1000, Math.ceil((st || 0) / 1000) * 1000); }
+function getEmbroideryPrice(stitches, qty) {
+  const i = EMB_QTY_TIERS.findIndex(t => qty >= t.min && qty <= t.max);
+  if (i === -1) return null;
+  const t = EMB_QTY_TIERS[i];
+  const rounded = roundStitches(stitches);
+  const extra = Math.max(0, rounded - EMB_BASE_STITCHES) / 1000;
+  return { price: t.base + extra * t.per1k, rounded, tier: t };
+}
 
 // Money math shared by every vendor. setupFlat = one-time cost spread over qty.
 function priceOut(gc, decorCostPU, overheadPU, setupFlat, q, mg) {
@@ -190,7 +226,8 @@ const styles = `
   .location-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; background: rgba(0,0,0,0.2); border: 1px solid rgba(254,251,221,0.1); border-radius: 8px; padding: 14px; }
   .location-row.sp-print-row { display: flex; flex-wrap: wrap; align-items: end; }
   .location-row.sp-print-row .field { flex: 1 1 130px; min-width: 120px; }
-  .emb-location-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 10px; align-items: end; background: rgba(0,0,0,0.2); border: 1px solid rgba(254,251,221,0.1); border-radius: 8px; padding: 14px; }
+  .emb-location-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: rgba(0,0,0,0.2); border: 1px solid rgba(254,251,221,0.1); border-radius: 8px; padding: 14px; }
+  .emb-location-row .field { flex: 1 1 150px; min-width: 130px; }
   .puff-toggle { display: flex; flex-direction: column; align-items: center; gap: 7px; padding-bottom: 3px; }
   .puff-toggle span { font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; color: rgba(254,251,221,0.4); white-space: nowrap; }
   .puff-checkbox { width: 20px; height: 20px; accent-color: #f8a232; cursor: pointer; }
@@ -330,15 +367,27 @@ const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "sho
 
 export default function PricingCalculator() {
   const [mode, setMode]               = useState("screen");
-  const [qty, setQty]                 = useState(72);
-  const [garmentCost, setGarmentCost] = useState(8.00);
-  const [margin, setMargin]           = useState(40);
+  // Order details are tracked per mode so the two tabs stay independent —
+  // typing a qty/cost/margin on Screen Printing must not leak into Embroidery.
+  const [orderDetails, setOrderDetails] = useState({
+    screen:     { qty: 72, garmentCost: 8.00, margin: 40 },
+    embroidery: { qty: 72, garmentCost: 8.00, margin: 40 },
+  });
+  const { qty, garmentCost, margin } = orderDetails[mode];
+  const setField = (k) => (v) => setOrderDetails(o => ({ ...o, [mode]: { ...o[mode], [k]: v } }));
+  const setQty = setField("qty");
+  const setGarmentCost = setField("garmentCost");
+  const setMargin = setField("margin");
   const [spLocations, setSpLocations] = useState([{ name: "Front", colors: 1, size: "medium", underbase: false, sleeve: false }]);
-  const [embLocations, setEmbLocations] = useState([{ name: "Left Chest", stitches: 7000, puff: false }]);
+  const [embLocations, setEmbLocations] = useState([{ name: "Left Chest", stitches: 7000, puff: false, puffColors: 1, metallic: false }]);
   const [includeDigitizing, setIncludeDigitizing] = useState(false);
-  const [digitizingFee, setDigitizingFee]         = useState(0);
+  const [digitizingFee, setDigitizingFee]         = useState(EMB_DIGI_BASE);
+  const [digitizingAuto, setDigitizingAuto]       = useState(true);
   const [exactReorder, setExactReorder]           = useState(false);
   const [polyester, setPolyester]                 = useState(false);
+  const [personalization, setPersonalization]     = useState({ enabled: false, lines: 1 });
+  const [topping, setTopping]                     = useState(false);
+  const [hooping, setHooping]                     = useState(false);
 
   // Quote management
   const [savedQuotes, setSavedQuotes] = useState(() => loadFromStorage());
@@ -352,9 +401,16 @@ export default function PricingCalculator() {
   const addSpLoc    = () => setSpLocations([...spLocations, { name: "", colors: 1, size: "medium", underbase: false, sleeve: false }]);
   const removeSpLoc = (i) => setSpLocations(spLocations.filter((_, x) => x !== i));
   const updateSpLoc = (i, k, v) => { const n=[...spLocations]; n[i]={...n[i],[k]:v}; setSpLocations(n); };
-  const addEmbLoc    = () => setEmbLocations([...embLocations, { name: "", stitches: 7000, puff: false }]);
+  const addEmbLoc    = () => setEmbLocations([...embLocations, { name: "", stitches: 7000, puff: false, puffColors: 1, metallic: false }]);
   const removeEmbLoc = (i) => setEmbLocations(embLocations.filter((_, x) => x !== i));
   const updateEmbLoc = (i, k, v) => { const n=[...embLocations]; n[i]={...n[i],[k]:v}; setEmbLocations(n); };
+
+  // LWE digitizing: $34.50 covers up to 12,000 stitches, +$5.75 per 1,000 over.
+  // Auto-derived from the largest logo unless the user overrides the field.
+  const maxEmbStitches = embLocations.reduce((m, l) => Math.max(m, parseInt(l.stitches) || 0), 0);
+  const autoDigitizing = EMB_DIGI_BASE
+    + Math.max(0, Math.ceil((maxEmbStitches - EMB_DIGI_INCL) / 1000)) * EMB_DIGI_PER_1K;
+  const effDigitizing = digitizingAuto ? autoDigitizing : (parseFloat(digitizingFee) || 0);
 
   // ── Calc ──────────────────────────────────────────────────────────────────
   const calc = useCallback(() => {
@@ -454,14 +510,44 @@ export default function PricingCalculator() {
         decorLines.push({ label: `${loc.name || "DTF"} — ${sizeLabel}`, perUnit: p });
       }
     } else {
+      // Embroidery — LWE stitch-count pricing (base + per-1,000), tiered by quantity
+      if (q < EMB_MIN_QTY) warnings.push(`LogoWear embroidery minimum is ${EMB_MIN_QTY} pieces (apparel and hats can't be combined for minimums or pricing).`);
       for (const loc of embLocations) {
-        if ((parseInt(loc.stitches)||0) > 7000) warnings.push(`${loc.name || "Location"}: stitch count exceeds 7,000 — custom quote needed.`);
-        const lp = getEmbroideryPrice() + (loc.puff ? PUFF_UPCHARGE : 0);
-        decorCostPU += lp;
-        decorLines.push({ label: `${loc.name || "Embroidery"} (≤7k st)${loc.puff ? " + Puff" : ""}`, perUnit: lp });
+        const st = parseInt(loc.stitches) || 0;
+        if (st > EMB_MAX_STITCHES) {
+          warnings.push(`${loc.name || "Location"}: ${st.toLocaleString()} stitches over ${EMB_MAX_STITCHES / 1000}k — confirm pricing with vendor.`);
+          continue;
+        }
+        const res = getEmbroideryPrice(st, q);
+        if (!res) { warnings.push(`${loc.name || "Location"}: no embroidery price at qty ${q}.`); continue; }
+        let pu = res.price, lbl = `${loc.name || "Embroidery"} (${(res.rounded / 1000).toLocaleString()}k st)`;
+        if (loc.puff) {
+          const extra = Math.max(0, (parseInt(loc.puffColors) || 1) - 1);
+          pu += PUFF_UPCHARGE + extra * PUFF_ADDL_COLOR;
+          lbl += ` + puff${extra ? ` (${extra + 1}c)` : ""}`;
+        }
+        if (loc.metallic) { pu += EMB_METALLIC; lbl += " + metallic"; }
+        decorCostPU += pu;
+        decorLines.push({ label: lbl, perUnit: pu });
       }
+      if (personalization.enabled) {
+        const p = EMB_PERSONALIZATION[personalization.lines] || 0;
+        decorCostPU += p;
+        decorLines.push({ label: `Personalization (${personalization.lines} line${personalization.lines > 1 ? "s" : ""})`, perUnit: p });
+      }
+      if (topping) { decorCostPU += EMB_TOPPING; decorLines.push({ label: "Topping (fleece/blanket/towel)", perUnit: EMB_TOPPING }); }
+      if (hooping) { decorCostPU += EMB_HOOPING; decorLines.push({ label: "Specialty hooping", perUnit: EMB_HOOPING }); }
+
+      // $57.50 embroidery minimum — LWE excludes digitizing & garments from the minimum
+      const embCogs = decorCostPU * q;
+      if (embCogs > 0 && embCogs < EMB_MIN_ORDER) {
+        const minAdj = EMB_MIN_ORDER - embCogs;
+        decorCostPU += minAdj / q;
+        decorLines.push({ label: `Order minimum (${fmt(EMB_MIN_ORDER)})`, perUnit: minAdj / q, flat: minAdj });
+      }
+      // Digitizing sits outside the minimum
       if (includeDigitizing) {
-        const df = parseFloat(digitizingFee) || 0;
+        const df = parseFloat(effDigitizing) || 0;
         decorLines.push({ label: "Digitizing (one-time)", perUnit: df / q, flat: df });
         decorCostPU += df / q;
       }
@@ -472,7 +558,7 @@ export default function PricingCalculator() {
              marginPU: m.marginPU, ccFeePU: m.ccFeePU,
              totalCost: m.totalCost, preBCC: m.preBCC, ccFee: m.ccFee,
              grandTotal: m.grandTotal, perUnit: m.perUnit, warnings };
-  }, [mode, qty, garmentCost, margin, spLocations, embLocations, includeDigitizing, digitizingFee, exactReorder, polyester]);
+  }, [mode, qty, garmentCost, margin, spLocations, embLocations, includeDigitizing, effDigitizing, exactReorder, polyester, personalization, topping, hooping]);
 
   const r = calc();
   const qn = parseInt(qty) || 0;
@@ -503,7 +589,8 @@ export default function PricingCalculator() {
       name: quoteName.trim(),
       savedAt: new Date().toISOString(),
       mode, qty, garmentCost, margin,
-      spLocations, embLocations, includeDigitizing, digitizingFee, exactReorder, polyester,
+      spLocations, embLocations, includeDigitizing, digitizingFee, digitizingAuto,
+      exactReorder, polyester, personalization, topping, hooping,
       perUnit: headlinePerUnit,
       grandTotal: headlineTotal,
       vendorLabel,
@@ -517,15 +604,19 @@ export default function PricingCalculator() {
 
   const loadQuote = (q) => {
     setMode(q.mode);
-    setQty(q.qty);
-    setGarmentCost(q.garmentCost);
-    setMargin(q.margin);
+    // Write straight into the quote's own mode — setQty/etc. target the *current*
+    // mode, and setMode hasn't applied yet when this runs.
+    setOrderDetails(o => ({ ...o, [q.mode]: { qty: q.qty, garmentCost: q.garmentCost, margin: q.margin } }));
     setSpLocations(q.spLocations.map(l => ({ underbase: false, sleeve: false, ...l })));
-    setEmbLocations(q.embLocations);
+    setEmbLocations(q.embLocations.map(l => ({ metallic: false, puffColors: 1, ...l })));
     setIncludeDigitizing(q.includeDigitizing);
     setDigitizingFee(q.digitizingFee);
+    setDigitizingAuto(q.digitizingAuto !== false);
     setExactReorder(!!q.exactReorder);
     setPolyester(!!q.polyester);
+    setPersonalization(q.personalization || { enabled: false, lines: 1 });
+    setTopping(!!q.topping);
+    setHooping(!!q.hooping);
     setShowQuotes(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -700,13 +791,27 @@ export default function PricingCalculator() {
                 <div className="field"><label>Location Name</label>
                   <input type="text" placeholder="e.g. Left Chest" value={loc.name} onChange={e=>updateEmbLoc(i,"name",e.target.value)} /></div>
                 <div className="field"><label>Stitch Count</label>
-                  <input type="number" min="500" max="15000" step="500" value={loc.stitches}
-                    className={loc.stitches > 7000 ? "error" : ""} onChange={e=>updateEmbLoc(i,"stitches",e.target.value)} />
-                  {loc.stitches > 7000 && <span className="hint">Custom quote needed</span>}</div>
+                  <input type="number" min="500" max="25000" step="500" value={loc.stitches}
+                    className={loc.stitches > EMB_MAX_STITCHES ? "error" : ""} onChange={e=>updateEmbLoc(i,"stitches",e.target.value)} />
+                  {loc.stitches > EMB_MAX_STITCHES
+                    ? <span className="hint">Over 25k — custom quote</span>
+                    : <span className="hint" style={{color:"rgba(254,251,221,0.4)"}}>Bills at {(roundStitches(loc.stitches)/1000).toLocaleString()}k stitches</span>}
+                </div>
                 <div className="puff-toggle">
-                  <span>Puff +$3</span>
+                  <span>3D Puff</span>
                   <input type="checkbox" className="puff-checkbox" checked={loc.puff}
                     onChange={e=>updateEmbLoc(i,"puff",e.target.checked)} id={`puff-${i}`} />
+                </div>
+                {loc.puff && (
+                  <div className="field" style={{flex:"0 0 110px"}}><label>Puff Colors</label>
+                    <select value={loc.puffColors || 1} onChange={e=>updateEmbLoc(i,"puffColors",parseInt(e.target.value))}>
+                      {[1,2,3,4].map(n=><option key={n} value={n}>{n} color{n>1?"s":""}</option>)}
+                    </select></div>
+                )}
+                <div className="puff-toggle">
+                  <span>Metallic</span>
+                  <input type="checkbox" className="puff-checkbox" checked={!!loc.metallic}
+                    onChange={e=>updateEmbLoc(i,"metallic",e.target.checked)} id={`met-${i}`} />
                 </div>
                 {embLocations.length > 1 && <button className="remove-btn" onClick={()=>removeEmbLoc(i)}>×</button>}
               </div>
@@ -715,12 +820,51 @@ export default function PricingCalculator() {
           <button className="add-btn" onClick={addEmbLoc}>+ Add Embroidery Location</button>
           <div className="section-label">Fees</div>
           <div className="toggle-row">
-            <span className="toggle-label">Digitizing Fee (one-time)</span>
+            <span className="toggle-label">
+              Digitizing (one-time, per design)
+              {includeDigitizing && digitizingAuto &&
+                <span style={{display:"block",fontSize:"0.68rem",color:"rgba(254,251,221,0.35)",marginTop:"2px"}}>
+                  Auto: {fmt(EMB_DIGI_BASE)} covers 12k stitches{maxEmbStitches > EMB_DIGI_INCL
+                    ? `, +${fmt(EMB_DIGI_PER_1K)}/1k over (${(maxEmbStitches/1000).toFixed(1)}k logo)` : ""}
+                </span>}
+            </span>
             <div className="toggle-right">
-              <input type="number" className="toggle-input" min="0" step="0.01" value={digitizingFee}
-                onChange={e=>setDigitizingFee(e.target.value)} disabled={!includeDigitizing} style={{opacity: includeDigitizing?1:0.4}} />
+              <input type="number" className="toggle-input" min="0" step="0.01"
+                value={digitizingAuto ? autoDigitizing.toFixed(2) : digitizingFee}
+                onChange={e=>{ setDigitizingAuto(false); setDigitizingFee(e.target.value); }}
+                disabled={!includeDigitizing} style={{opacity: includeDigitizing?1:0.4}} />
+              {!digitizingAuto && includeDigitizing &&
+                <button className="qi-btn qi-btn-load" onClick={()=>setDigitizingAuto(true)}>Auto</button>}
               <input type="checkbox" checked={includeDigitizing} onChange={e=>setIncludeDigitizing(e.target.checked)} id="dig-toggle" />
               <label htmlFor="dig-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Include</label>
+            </div>
+          </div>
+          <div className="toggle-row">
+            <span className="toggle-label">Personalization / names — stock fonts (per piece)</span>
+            <div className="toggle-right">
+              <select className="toggle-input" style={{width:"130px"}} value={personalization.lines}
+                onChange={e=>setPersonalization(p=>({...p, lines:parseInt(e.target.value)}))}
+                disabled={!personalization.enabled} >
+                <option value={1}>1 line +{fmt(EMB_PERSONALIZATION[1])}</option>
+                <option value={2}>2 lines +{fmt(EMB_PERSONALIZATION[2])}</option>
+              </select>
+              <input type="checkbox" checked={personalization.enabled}
+                onChange={e=>setPersonalization(p=>({...p, enabled:e.target.checked}))} id="pers-toggle" />
+              <label htmlFor="pers-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Include</label>
+            </div>
+          </div>
+          <div className="toggle-row">
+            <span className="toggle-label">Topping required — fleece, blankets, towels (+{fmt(EMB_TOPPING)}/pc)</span>
+            <div className="toggle-right">
+              <input type="checkbox" checked={topping} onChange={e=>setTopping(e.target.checked)} id="top-toggle" />
+              <label htmlFor="top-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Include</label>
+            </div>
+          </div>
+          <div className="toggle-row">
+            <span className="toggle-label">Specialty hooping — bags, jackets, towels (+{fmt(EMB_HOOPING)}/pc)</span>
+            <div className="toggle-right">
+              <input type="checkbox" checked={hooping} onChange={e=>setHooping(e.target.checked)} id="hoop-toggle" />
+              <label htmlFor="hoop-toggle" style={{fontSize:"0.72rem",color:"rgba(254,251,221,0.5)",cursor:"pointer"}}>Include</label>
             </div>
           </div>
         </>)}
