@@ -91,7 +91,7 @@ const EMB_METALLIC        = 0.95;   // metallic thread, per pc / per location ($
 const EMB_PERSONALIZATION = { 1: 8.86, 2: 12.65 };  // stock fonts, $7 / $10 list
 const EMB_TOPPING         = 0.64;   // topping req'd: fleece, blankets, towels ($0.50 list)
 const EMB_HOOPING         = 0.64;   // specialty hooping: bags, jackets, towels ($0.50 list)
-const OVERHEAD_PER_PC  = 1.50;
+const OVERHEAD_PER_PC  = 1.00;
 const CC_FEE           = 0.04;
 const LS_KEY           = "hh_saved_quotes";
 
@@ -872,7 +872,7 @@ export default function PricingCalculator() {
         {/* Fixed Costs */}
         <div className="section-label">Applied Automatically</div>
         <div className="fixed-strip">
-          {[{l:"Overhead",v:"$1.50 / pc"},{l:"CC Processing",v:"4.0%"}].map(x=>(
+          {[{l:"Overhead",v:`${fmt(OVERHEAD_PER_PC)} / pc`},{l:"CC Processing",v:"4.0%"}].map(x=>(
             <div className="fixed-pill" key={x.l}><span className="fp-label">{x.l}</span><span className="fp-val">{x.v}</span></div>
           ))}
         </div>
@@ -955,7 +955,7 @@ export default function PricingCalculator() {
               {r.decorLines.map((dl,i)=>(
                 <div className="result-line" key={i}><span>{dl.label}</span><span className="val">{dl.flat ? fmt(dl.flat) : fmt(dl.perUnit * r.q)}</span></div>
               ))}
-              <div className="result-line"><span>Overhead ({r.q} × $1.50)</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
+              <div className="result-line"><span>Overhead ({r.q} × {fmt(r.overheadPU)})</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
               <div className="result-line rl-subtotal"><span>Total cost</span><span className="val">{fmt(r.totalCost)}</span></div>
               <div className="result-line"><span>Profit ({margin}% margin)</span><span className="val">+{fmt(r.preBCC - r.totalCost)}</span></div>
               <div className="result-line"><span>Credit card fee (4%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
