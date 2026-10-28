@@ -92,7 +92,7 @@ const EMB_PERSONALIZATION = { 1: 8.86, 2: 12.65 };  // stock fonts, $7 / $10 lis
 const EMB_TOPPING         = 0.64;   // topping req'd: fleece, blankets, towels ($0.50 list)
 const EMB_HOOPING         = 0.64;   // specialty hooping: bags, jackets, towels ($0.50 list)
 const OVERHEAD_PER_PC  = 1.00;
-const CC_FEE           = 0.04;
+const CC_FEE           = 0.03;
 const LS_KEY           = "hh_saved_quotes";
 
 // DTF pricing — orders under 48 pieces, priced by print size
@@ -915,7 +915,7 @@ export default function PricingCalculator() {
                         )}
                         <div className="vc-line"><span className="vc-l">Overhead</span><span className="vc-v">{fmt(r.overheadPU)}</span></div>
                         <div className="vc-line vc-profit vc-div"><span className="vc-l">Margin ({margin}%)</span><span className="vc-v">+{fmt(v.marginPU)}</span></div>
-                        <div className="vc-line"><span className="vc-l">CC fee (4%)</span><span className="vc-v">+{fmt(v.ccFeePU)}</span></div>
+                        <div className="vc-line"><span className="vc-l">CC fee (3%)</span><span className="vc-v">+{fmt(v.ccFeePU)}</span></div>
                         <div className="vc-line vc-tot vc-div"><span className="vc-l">Total / pc</span><span className="vc-v">{fmt(v.perUnit)}</span></div>
                       </div>
                       {v.note && <div className="vc-note">{v.note}</div>}
@@ -947,7 +947,7 @@ export default function PricingCalculator() {
                   ))}
                   <div className="pc-line"><span className="pc-lbl">Overhead</span><span className="pc-val">{fmt(r.overheadPU)}</span></div>
                   <div className="pc-line pc-profit pc-divider"><span className="pc-lbl">Margin ({margin}%)</span><span className="pc-val">+{fmt(r.marginPU)}</span></div>
-                  <div className="pc-line"><span className="pc-lbl">CC fee (4%)</span><span className="pc-val">+{fmt(r.ccFeePU)}</span></div>
+                  <div className="pc-line"><span className="pc-lbl">CC fee (3%)</span><span className="pc-val">+{fmt(r.ccFeePU)}</span></div>
                   <div className="pc-line pc-total pc-divider"><span className="pc-lbl">Total / pc</span><span className="pc-val">{fmt(r.perUnit)}</span></div>
                 </div>
               </div>
@@ -958,7 +958,7 @@ export default function PricingCalculator() {
               <div className="result-line"><span>Overhead ({r.q} × {fmt(r.overheadPU)})</span><span className="val">{fmt(r.overheadPU * r.q)}</span></div>
               <div className="result-line rl-subtotal"><span>Total cost</span><span className="val">{fmt(r.totalCost)}</span></div>
               <div className="result-line"><span>Profit ({margin}% margin)</span><span className="val">+{fmt(r.preBCC - r.totalCost)}</span></div>
-              <div className="result-line"><span>Credit card fee (4%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
+              <div className="result-line"><span>Credit card fee (3%)</span><span className="val">+{fmt(r.ccFee)}</span></div>
               <div className="result-total">
                 <span className="rt-label">Order Total</span>
                 <div><div className="rt-amount">{fmt(r.grandTotal)}</div><div className="rt-note">+ tax at invoice</div></div>
